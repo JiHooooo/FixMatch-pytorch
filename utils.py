@@ -45,6 +45,10 @@ def net_builder(net_name, from_name: bool, net_conf=None):
         else:
             return models.__dict__[net_name]
         
+    elif net_name == 'SelfModel':
+        import models.nets.self_net import CNN
+        return CNN
+    
     else:
         if net_name == 'WideResNet':
             import models.nets.wrn as net
