@@ -67,7 +67,7 @@ _Final_layer_info = {
 
 
 class CNN(nn.Module):
-    def __init__(self, device=None,train_flag=True):
+    def __init__(self, num_classes, device=None,train_flag=True):
         self.device = device
         self.input_size = _input_size
         if train_flag:
@@ -76,7 +76,7 @@ class CNN(nn.Module):
             pretrained_model_flag = False
         extractor = models.__dict__[_model_name](pretrained=pretrained_model_flag)
         #extractor = models.__dict__[_model_name](pretrained=False)
-        extractor = Change_the_last_layer(extractor, _model_name, _label_num)
+        extractor = Change_the_last_layer(extractor, _model_name, num_classes)
         super().__init__()
         self.extractor = extractor
 
