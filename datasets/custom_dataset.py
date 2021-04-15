@@ -1,6 +1,7 @@
 import os
 import glob
 import random
+import logging
 from PIL import Image
 import numpy as np
 import pandas as pd
@@ -16,23 +17,28 @@ import copy
 from .ssl_dataset import SSL_Dataset
 
 _extension = ['jpg','png','bmp']
-_label_name = ['A','B','C','bad']
-_label_name_dict = {'A':0,'B':1, 'C':1,'D':2,'Rotten':3,'Soil':3,'Stone':3}
+_label_name = ['airplane','automobile','ship', 'truck']
+_model_mean = [0.485,0.456,0.406]
+_model_std = [0.229,0.224,0.225]
 
-def get_transform(train=True):
+def get_transform(train=True, image_size=224, crop_ratio=0.1, normalize_flag=True):
+    transforms_list = []
+    transforms_list.append(transforms.Resize((image_size,image_size)))
     if train:
-        return transforms.Compose([transforms.Resize((224,224)),
-                                    transforms.RandomHorizontalFlip(),
-                                    transforms.RandomCrop(224, padding=4),
-                                    transforms.GaussianBlur(3, sigma=(0.1, 2.0)),
-                                    transforms.ToTensor(), 
-                                    #transforms.Normalize(mean, std)
-                                    ])
+        transforms_list.extend([
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomCrop(image_size, padding=int(image_size*crop_ratio))
+        ])
+    if normalize_flag:
+        transforms_list.extend([
+            transforms.ToTensor(), 
+            transforms.Normalize(_model_mean, _model_std),
+        ])
     else:
-        return transforms.Compose([transforms.Resize((224,224)),
-                                    transforms.ToTensor(), 
-                                    #transforms.Normalize(mean, std)
-                                    ])
+        transforms_list.extend([
+            transforms.ToTensor(),
+        ])
+    return transforms.Compose(transforms_list)
 
 class SelfDataset(Dataset):
     """
@@ -71,7 +77,8 @@ class SelfDataset(Dataset):
         super(SelfDataset, self).__init__()
         self.transforms = transforms
         self.ssl_dataset_flag = ssl_dataset_flag
-        self.num_classes = _label_name
+        self.num_classes = len(_label_name)
+        self.label_names = _label_name
         self.use_strong_transform = use_strong_transform
         self.onehot = onehot
 
@@ -144,10 +151,10 @@ class SelfDataset(Dataset):
             image_label_list = []
             
             for label_folder in sub_folder_list:
-                if label_folder in _label_name:
+                if label_folder in self.label_names:
                     image_pathes_one_folder = self.load_image_of_one_folder('%s/%s'%(folder_path, label_folder))
                     image_path_list.append(image_pathes_one_folder)
-                    image_label_list.append([_label_name.index(label_folder) for _ in image_pathes_one_folder])
+                    image_label_list.append([self.label_names.index(label_folder) for _ in image_pathes_one_folder])
         else:
             image_path_list = self.load_image_of_one_folder(folder_path)
             image_label_list = [-1 for _ in image_path_list]
@@ -199,25 +206,6 @@ class SelfDataset(Dataset):
     def __len__(self):
         return len(self.image_path_list)
 
-class SelfDataset_change_name(SelfDataset):
-    def load_image_label_from_folder(self, folder_path):
-
-        if not self.ssl_dataset_flag:
-            sub_folder_list = os.listdir(folder_path)
-            image_path_list = []
-            image_label_list = []
-            
-            for label_folder in sub_folder_list:
-                if label_folder in _label_name_dict.keys():
-                    image_pathes_one_folder = self.load_image_of_one_folder('%s/%s'%(folder_path, label_folder))
-                    image_path_list.append(image_pathes_one_folder)
-                    image_label_list.append([_label_name_dict[label_folder] for _ in image_pathes_one_folder])
-        else:
-            image_path_list = self.load_image_of_one_folder(folder_path)
-            image_label_list = [-1 for _ in image_path_list]
-
-        return image_path_list, image_label_list
-
 class SelfDataset_fold(SelfDataset):
 
     def __init__(self,
@@ -252,16 +240,15 @@ class SelfDataset_fold(SelfDataset):
         """
         self.transforms = transforms
         self.ssl_dataset_flag = ssl_dataset_flag
-        self.num_classes = _label_name
+        self.num_classes = len(_label_name)
         self.use_strong_transform = use_strong_transform
         self.onehot = onehot
 
         #read all image path
         df_info = pd.read_csv(csv_path)
-        label_name = _label_name
-        print('the label name : ' + str(label_name))
+        print('the label name : ' + str(_label_name))
         
-        self.label_names = [str(i) for i in label_name]
+        self.label_names = [str(i) for i in _label_name]
         if train_flag:
             selected_df_info = df_info[df_info['fold'] != fold_num]
         else:
@@ -303,7 +290,7 @@ class SelfDataset_fold(SelfDataset):
             self.strong_transforms = strong_transforms
 
 class SelfDataset_multi(Dataset):
-    def __init__(self, csv_path, transforms = None, 
+    def __init__(self, csv_path,transforms = None, 
                 seed=0, lb_num=0, lb_flag=True):
         image_path_list, image_label_list = self.Image_Info_from_df(csv_path)
         self.image_path_list, self.image_label_list = self.split_lb_ulb(
@@ -312,6 +299,7 @@ class SelfDataset_multi(Dataset):
         )
         self.transforms = transforms
         self.label_num = len(_label_name)
+        self.label_names = _label_name
         if not lb_flag:
             self.strong_transforms = copy.deepcopy(transforms)
             self.strong_transforms.transforms.insert(0, RandAugment(3,5))
@@ -324,18 +312,22 @@ class SelfDataset_multi(Dataset):
 
     @staticmethod
     def Image_Info_from_df(df_path):
-        print('start loading information')
-        df = pd.read_csv(df_path,encoding="cp932")
+        try:
+            df = pd.read_csv(df_path,encoding="cp932")
+        except:
+            df = pd.read_csv(df_path,encoding="utf-8")
+            logging.info('load csv with utf-8 encoding method')
+        else:
+            logging.info('load csv with cp932 encoding method')
         image_path_list = []
         image_label_list = []
         for index in range(len(df)):
             #input image name
             image_info_one = [df.iloc[index]['image_path'],]
-            for label in _label_name:
+            for label in self.label_names:
                 image_info_one.append(int(df.iloc[index][label]))                                 
             image_path_list.append(image_info_one[0])
             image_label_list.append(image_info_one[1:])
-        print('finish loading information')
         return image_path_list, image_label_list
     
     @staticmethod

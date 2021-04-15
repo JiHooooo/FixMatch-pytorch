@@ -1,5 +1,6 @@
 #import needed library
 import os
+import logging
 import random
 import warnings
 
@@ -16,7 +17,7 @@ from train_utils import TBLog, get_SGD, get_cosine_schedule_with_warmup
 from models.fixmatch.fixmatch import FixMatch
 from datasets.ssl_dataset import SSL_Dataset
 from datasets.data_utils import get_data_loader
-from datasets.custom_dataset import get_transform, SelfDataset, SelfDataset_multi, SelfDataset_fold
+
 
 
 def main(args):
@@ -102,57 +103,7 @@ def main_worker(gpu, ngpus_per_node, args):
     logger = get_logger(args.save_name, save_path, logger_level)
     logger.warning(f"USE GPU: {args.gpu} for training")
     
-    # Construct Dataset & DataLoader
-    train_transforms = get_transform(True, image_size=args.image_size, normalize_flag=args.normlization)
-    val_transforms = get_transform(False, image_size=args.image_size, normalize_flag=args.normlization)
     
-    if args.num_labels > 0:
-        add_param = {'seed':args.shuffle_seed, 'lb_num':args.num_labels}
-    else:
-        add_param = {}
-
-    lb_dset = SelfDataset(args.data_dir +'/train', ssl_dataset_flag=False,
-                        transforms=train_transforms, use_strong_transform=False,
-                        strong_transforms=None, onehot= not args.hard_label, **add_param)
-    if args.ulb_data_dir is None:
-        ulb_dset = SelfDataset(args.data_dir +'/train', ssl_dataset_flag=True,
-                            transforms=train_transforms, use_strong_transform=True,
-                            strong_transforms=None, onehot= not args.hard_label, **add_param)    
-    else:
-        ulb_dset = SelfDataset(args.ulb_data_dir, ssl_dataset_flag=True, 
-                        transforms=train_transforms, use_strong_transform=True,
-                        strong_transforms=None, onehot=not args.hard_label, **add_param)            
-    eval_dset = SelfDataset(args.data_dir +'/val', ssl_dataset_flag=False,
-                        transforms=val_transforms, use_strong_transform=False,
-                        strong_transforms=None, onehot= not args.hard_label)
-
-    logger.info('The datasets have been loaded. labeled train:%d Valid:%d Not labeled train:%s'%( \
-        len(lb_dset), len(eval_dset), len(ulb_dset)))
-    if len(lb_dset) <= 0 or len(eval_dset)<=0 or len(ulb_dset)<=0:
-        logger.warning("One of datasets don't contain any image, please check your dataset set")
-        exit()
-
-    loader_dict = {}
-    dset_dict = {'train_lb': lb_dset, 'train_ulb': ulb_dset, 'eval': eval_dset}
-    
-    loader_dict['train_lb'] = get_data_loader(dset_dict['train_lb'],
-                                              args.batch_size,
-                                              data_sampler = args.train_sampler,
-                                              num_iters=args.num_train_iter,
-                                              num_workers=args.num_workers, 
-                                              distributed=args.distributed)
-    
-    loader_dict['train_ulb'] = get_data_loader(dset_dict['train_ulb'],
-                                               args.batch_size*args.uratio,
-                                               data_sampler = args.train_sampler,
-                                               num_iters=args.num_train_iter,
-                                               num_workers=4*args.num_workers,
-                                               distributed=args.distributed)
-    
-    loader_dict['eval'] = get_data_loader(dset_dict['eval'],
-                                          args.eval_batch_size, 
-                                          num_workers=args.num_workers)
-
     # SET FixMatch: class FixMatch in models.fixmatch
     args.bn_momentum = 1.0 - args.ema_m
     _net_builder = net_builder(args.net, 
@@ -165,14 +116,13 @@ def main_worker(gpu, ngpus_per_node, args):
                                 'dropRate': args.dropout})
     
     model = FixMatch(_net_builder,
-                     lb_dset.num_classes,
+                     args.num_classes,
                      args.ema_m,
                      args.T,
                      args.p_cutoff,
                      args.ulb_loss_ratio,
                      args.hard_label,
                      num_eval_iter=args.num_eval_iter,
-                     num_save_iter=args.num_save_iter
                      tb_log=tb_log,
                      logger=logger)
 
@@ -184,7 +134,7 @@ def main_worker(gpu, ngpus_per_node, args):
     optimizer = get_SGD(model.train_model, 'SGD', args.lr, args.momentum, args.weight_decay)
     scheduler = get_cosine_schedule_with_warmup(optimizer,
                                                 args.num_train_iter,
-                                                num_warmup_steps=int(args.num_train_iter*0.01))
+                                                num_warmup_steps=args.num_train_iter*0)
     ## set SGD and cosine lr on FixMatch 
     model.set_optimizer(optimizer, scheduler)
     
@@ -225,6 +175,37 @@ def main_worker(gpu, ngpus_per_node, args):
     logger.info(f"Arguments: {args}")
     
     cudnn.benchmark = True
+
+
+    # Construct Dataset & DataLoader
+    train_dset = SSL_Dataset(name=args.dataset, train=True, 
+                             num_classes=args.num_classes, data_dir=args.data_dir)
+    lb_dset, ulb_dset = train_dset.get_ssl_dset(args.num_labels)
+    
+    _eval_dset = SSL_Dataset(name=args.dataset, train=False, 
+                             num_classes=args.num_classes, data_dir=args.data_dir)
+    eval_dset = _eval_dset.get_dset()
+    
+    loader_dict = {}
+    dset_dict = {'train_lb': lb_dset, 'train_ulb': ulb_dset, 'eval': eval_dset}
+    
+    loader_dict['train_lb'] = get_data_loader(dset_dict['train_lb'],
+                                              args.batch_size,
+                                              data_sampler = args.train_sampler,
+                                              num_iters=args.num_train_iter,
+                                              num_workers=args.num_workers, 
+                                              distributed=args.distributed)
+    
+    loader_dict['train_ulb'] = get_data_loader(dset_dict['train_ulb'],
+                                               args.batch_size*args.uratio,
+                                               data_sampler = args.train_sampler,
+                                               num_iters=args.num_train_iter,
+                                               num_workers=4*args.num_workers,
+                                               distributed=args.distributed)
+    
+    loader_dict['eval'] = get_data_loader(dset_dict['eval'],
+                                          args.eval_batch_size, 
+                                          num_workers=args.num_workers)
     
     ## set DataLoader on FixMatch
     model.set_data_loader(loader_dict)
@@ -242,7 +223,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 (args.multiprocessing_distributed and args.rank % ngpus_per_node == 0):
         model.save_model('latest_model.pth', save_path)
         
-    logger.warning(f"GPU {args.rank} training is FINISHED")
+    logging.warning(f"GPU {args.rank} training is FINISHED")
     
 
 if __name__ == "__main__":
@@ -267,17 +248,12 @@ if __name__ == "__main__":
                         help='total number of training iterations')
     parser.add_argument('--num_eval_iter', type=int, default=10000,
                         help='evaluation frequency')
-    parser.add_argument('--num_save_iter', type=int, default=10000,
-                        help='frequency of saving model')
-    parser.add_argument('--num_labels', type=int, default=0,
-                        help='how many image is labeled')
-    parser.add_argument('--shuffle_seed', type=int, default=123, 
-                        help='seed to take labeled image from origianl dataset')
-    parser.add_argument('--batch_size', type=int, default=16,
+    parser.add_argument('--num_labels', type=int, default=4000)
+    parser.add_argument('--batch_size', type=int, default=64,
                         help='total number of batch size of labeled data')
-    parser.add_argument('--uratio', type=int, default=7, 
+    parser.add_argument('--uratio', type=int, default=7,
                         help='the ratio of unlabeled data to labeld data in each mini-batch')
-    parser.add_argument('--eval_batch_size', type=int, default=128,
+    parser.add_argument('--eval_batch_size', type=int, default=1024,
                         help='batch size of evaluation data loader (it does not affect the accuracy)')
     
     parser.add_argument('--hard_label', type=bool, default=True)
@@ -297,11 +273,8 @@ if __name__ == "__main__":
     '''
     Backbone Net Configurations
     '''
-    parser.add_argument('--net', type=str, default='SelfModel',
-                        help='model name used for training model')
+    parser.add_argument('--net', type=str, default='WideResNet')
     parser.add_argument('--net_from_name', type=bool, default=False)
-
-    #The relevant parameter for initializing wideResnet
     parser.add_argument('--depth', type=int, default=28)
     parser.add_argument('--widen_factor', type=int, default=2)
     parser.add_argument('--leaky_slope', type=float, default=0.1)
@@ -310,14 +283,12 @@ if __name__ == "__main__":
     '''
     Data Configurations
     '''
-    parser.add_argument('--data_dir', type=str, default='./data_folder/sl_data')
-    parser.add_argument('--ulb_data_dir', type=str, default='./data_folder/ssl_data')
+    
+    parser.add_argument('--data_dir', type=str, default='./data')
+    parser.add_argument('--dataset', type=str, default='cifar10')
     parser.add_argument('--train_sampler', type=str, default='RandomSampler')
-    parser.add_argument('--num_workers', type=int, default=4)
-    parser.add_argument('--image_size', type=int, default=224,
-                        help='image size for model calculation')
-    parser.add_argument('--normlization', type=bool, default=True,
-                        help='whether to use normlization')
+    parser.add_argument('--num_classes', type=int, default=10)
+    parser.add_argument('--num_workers', type=int, default=1)
     
     '''
     multi-GPUs & Distrbitued Training

@@ -10,12 +10,12 @@ from train_utils import AverageMeter
 
 from .fixmatch_utils import consistency_loss, Get_Scalar
 from train_utils import ce_loss
-
-
+import tqdm
+import sys
 
 class FixMatch:
     def __init__(self, net_builder, num_classes, ema_m, T, p_cutoff, lambda_u,\
-                 hard_label=True, t_fn=None, p_fn=None, it=0, num_eval_iter=1000, tb_log=None, logger=None):
+                 hard_label=True, t_fn=None, p_fn=None, it=0, num_eval_iter=1000, tb_log=None, logger=None, num_save_iter=0):
         """
         class Fixmatch contains setter of data_loader, optimizer, and model update methods.
         Args:
@@ -27,9 +27,10 @@ class FixMatch:
             lambda_u: ratio of unsupervised loss to supervised loss
             hard_label: If True, consistency regularization use a hard pseudo label.
             it: initial iteration count
-            num_eval_iter: freqeuncy of iteration (after 500,000 iters)
+            num_eval_iter: evaluation freqeuncy of iteration (after 500,000 iters)
             tb_log: tensorboard writer (see train_utils.py)
             logger: logger (see utils.py)
+            num_save_iter: evaluation frequency of saving model
         """
         
         super(FixMatch, self).__init__()
@@ -46,6 +47,7 @@ class FixMatch:
         self.train_model = net_builder(num_classes=num_classes) 
         self.eval_model = net_builder(num_classes=num_classes)
         self.num_eval_iter = num_eval_iter
+        self.num_save_iter = num_save_iter
         self.t_fn = Get_Scalar(T) #temperature params function
         self.p_fn = Get_Scalar(p_cutoff) #confidence cutoff function
         self.lambda_u = lambda_u
@@ -111,7 +113,7 @@ class FixMatch:
         scaler = GradScaler()
         amp_cm = autocast if args.amp else contextlib.nullcontext
 
-        for (x_lb, y_lb), (x_ulb_w, x_ulb_s, _) in zip(self.loader_dict['train_lb'], self.loader_dict['train_ulb']):
+        for (x_lb, y_lb), (x_ulb_w, x_ulb_s, _) in tqdm.tqdm(zip(self.loader_dict['train_lb'], self.loader_dict['train_ulb']),total=args.num_train_iter):
             
             # prevent the training iterations exceed args.num_train_iter
             if self.it > args.num_train_iter:
@@ -148,7 +150,6 @@ class FixMatch:
                                                use_hard_labels=args.hard_label)
 
                 total_loss = sup_loss + self.lambda_u * unsup_loss
-            
             # parameter updates
             if args.amp:
                 scaler.scale(total_loss).backward()
@@ -187,14 +188,16 @@ class FixMatch:
                 if tb_dict['eval/top-1-acc'] > best_eval_acc:
                     best_eval_acc = tb_dict['eval/top-1-acc']
                     best_it = self.it
-                
+                sys.stdout.write('\x1B[1A\x1B[K')
                 self.print_fn(f"{self.it} iteration, USE_EMA: {hasattr(self, 'eval_model')}, {tb_dict}, BEST_EVAL_ACC: {best_eval_acc}, at {best_it} iters")
             
+
             if not args.multiprocessing_distributed or \
                     (args.multiprocessing_distributed and args.rank % ngpus_per_node == 0):
-                
+                if self.it and self.num_save_iter and self.it % self.num_save_iter == 0:
+                    self.save_model('model_iter_%d.pth'%(self.it), save_path, save_model_flag=False)
                 if self.it == best_it:
-                    self.save_model('model_best.pth', save_path)
+                    self.save_model('model_best.pth', save_path, save_model_flag=True)
                 
                 if not self.tb_log is None:
                     self.tb_log.update(tb_dict, self.it)
@@ -239,15 +242,18 @@ class FixMatch:
         return {'eval/loss': total_loss/total_num, 'eval/top-1-acc': total_acc/total_num}
     
     
-    def save_model(self, save_name, save_path):
+    def save_model(self, save_name, save_path, save_model_flag=False):
         save_filename = os.path.join(save_path, save_name)
         train_model = self.train_model.module if hasattr(self.train_model, 'module') else self.train_model
         eval_model = self.eval_model.module if hasattr(self.eval_model, 'module') else self.eval_model
-        torch.save({'train_model': train_model.state_dict(),
-                    'eval_model': eval_model.state_dict(),
-                    'optimizer': self.optimizer.state_dict(),
-                    'scheduler': self.scheduler.state_dict(),
-                    'it': self.it}, save_filename)
+        if save_model_flag:
+            torch.save(eval_model.state_dict(), save_filename)
+        else:
+            torch.save({'train_model': train_model.state_dict(),
+                        'eval_model': eval_model.state_dict(),
+                        'optimizer': self.optimizer.state_dict(),
+                        'scheduler': self.scheduler.state_dict(),
+                        'it': self.it}, save_filename)
         
         self.print_fn(f"model saved: {save_filename}")
     

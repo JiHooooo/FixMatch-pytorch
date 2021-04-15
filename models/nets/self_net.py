@@ -6,14 +6,9 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2, ToTensor
 
 _input_size = (224,224)
-_model_mean = [0.485,0.456,0.406]
-_model_std = [0.229,0.224,0.225]
 _label_name = ['A','B','C','bad']
-_label_num = len(_label_name)
 #_label_name = ['1_Normal','2_Kamemushi']
 _model_name = 'resnet50'
-#_label_name = ['normal','okkizu','nama1','nama2','nama3', 'hanazami','hiyake','mizuyake','black_point','hana']
-# _model_name : resnet50
 
 _gram_layer_info = {
     'resnet18' : {'Layer_name':'layer3', 'Layer_index':['1',]},

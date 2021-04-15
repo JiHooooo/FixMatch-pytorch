@@ -24,7 +24,7 @@ def test_setattr_cls_from_kwargs():
         print(f"{key}:\t {getattr(test_cls, key)}")
         
         
-def net_builder(net_name, from_name: bool, net_conf=None):
+def net_builder(net_name, from_name: bool, logger,net_conf=None):
     """
     return **class** of backbone network (not instance).
     Args
@@ -32,12 +32,16 @@ def net_builder(net_name, from_name: bool, net_conf=None):
         from_name: If True, net_buidler takes models in torch.vision models. Then, net_conf is ignored.
         net_conf: When from_name is False, net_conf is the configuration of backbone network (now, only WRN is supported).
     """
+    if logger is None:
+        logger_tool = print
+    else:
+        logger_tool = logger.info
     if from_name:
         import torchvision.models as models
         model_name_list = sorted(name for name in models.__dict__
                                 if name.islower() and not name.startswith("__")
                                 and callable(models.__dict__[name]))
-
+        logger_tool('The model is loaded from torchivision based on the name you input')
         if net_name not in model_name_list:
             assert Exception(f"[!] Networks\' Name is wrong, check net config, \
                                expected: {model_name_list}  \
@@ -46,12 +50,14 @@ def net_builder(net_name, from_name: bool, net_conf=None):
             return models.__dict__[net_name]
         
     elif net_name == 'SelfModel':
-        import models.nets.self_net import CNN
+        from models.nets.self_net import CNN
+        logger_tool('The model is loaded from (models.nets.self_net)')
         return CNN
     
     else:
         if net_name == 'WideResNet':
             import models.nets.wrn as net
+            logger_tool('The WideResent model is used')
             builder = getattr(net, 'build_WideResNet')()
         else:
             assert Exception("Not Implemented Error")
@@ -74,7 +80,6 @@ def get_logger(name, save_path=None, level='INFO'):
     streamHandler = logging.StreamHandler()
     streamHandler.setFormatter(log_format)
     logger.addHandler(streamHandler)
-    
     if not save_path is None:
         os.makedirs(save_path, exist_ok=True)
         fileHandler = logging.FileHandler(os.path.join(save_path, 'log.txt'))
