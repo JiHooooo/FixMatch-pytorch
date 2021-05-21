@@ -5,9 +5,6 @@ import torchvision.models as models
 import albumentations as A
 from albumentations.pytorch import ToTensorV2, ToTensor
 
-_input_size = (224,224)
-_label_name = ['A','B','C','bad']
-#_label_name = ['1_Normal','2_Kamemushi']
 _model_name = 'resnet50'
 
 _gram_layer_info = {
@@ -62,9 +59,9 @@ _Final_layer_info = {
 
 
 class CNN(nn.Module):
-    def __init__(self, num_classes, device=None,train_flag=True):
+    def __init__(self, num_classes, device=None, train_flag=True):
         self.device = device
-        self.input_size = _input_size
+    
         if train_flag:
             pretrained_model_flag = True
         else:
@@ -75,27 +72,10 @@ class CNN(nn.Module):
         super().__init__()
         self.extractor = extractor
 
-        self.transform = A.Compose([
-            A.Resize(height=_input_size[0], width=_input_size[1], p=1.0),
-            A.Normalize(p=1.0),
-            ToTensorV2(),
-            #ToTensor(),
-        ])
-
     
     def forward(self, x):
         return self.extractor(x)
 
-    def predict(self, x):
-        x = self.image_process(x)
-        with torch.no_grad():
-            x = self.forward(x)
-        return x
-        
-    def image_process(self, x):
-        transformed = self.transform(image=x)
-        x = transformed['image']
-        return x[None].to(self.device)
         
 
 

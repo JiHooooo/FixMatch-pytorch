@@ -172,7 +172,7 @@ def main_worker(gpu, ngpus_per_node, args):
                      args.ulb_loss_ratio,
                      args.hard_label,
                      num_eval_iter=args.num_eval_iter,
-                     num_save_iter=args.num_save_iter
+                     num_save_iter=args.num_save_iter,
                      tb_log=tb_log,
                      logger=logger)
 
